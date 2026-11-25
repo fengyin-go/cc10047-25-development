@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.reconciliation import reconciliation_engine
 from app.store import store
 
 
@@ -16,6 +17,15 @@ class SnapshotMgrService(BaseModuleService):
     STATUS_ORDER = ["创建中", "可用", "已过期", "已清理"]
     ACTION_RULES = {"创建快照": "可用", "延长保留": "已过期"}
     NEGATIVE_ACTIONS = []
+
+    def get_entry(self, entry_id: int) -> dict[str, Any] | None:
+        entry = super().get_entry(entry_id)
+        if entry and entry.get("publication_id"):
+            publication = reconciliation_engine.get_publication(str(entry["publication_id"]))
+            if publication:
+                # 通用快照详情也携带发布清单、范围依据和未结记录。
+                return {**entry, "publication": publication, "reconciliation": publication}
+        return entry
 
     def _safe_int(self, val: Any, default: int = 0) -> int:
         try:

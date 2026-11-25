@@ -15,6 +15,13 @@
       </div>
     </header>
 
+    <PartitionReconciliationPanel
+      v-if="meta.key === 'partition_merge'"
+      id="partition-reconciliation-anchor"
+      @published="reload"
+    />
+    <SnapshotPublicationsPanel v-if="meta.key === 'snapshot_mgr'" id="snapshot-publications-anchor" />
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -50,6 +57,24 @@
           <td v-for="column in meta.fields" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
+            <button
+              v-if="reconciliationScope(row)"
+              type="button"
+              class="link recon-row-link"
+              :data-testid="`open-reconciliation-${String(row['任务标识'] || row.id)}`"
+              @click="openReconciliation(row)"
+            >
+              打开 M41 视图
+            </button>
+            <button
+              v-if="meta.key === 'snapshot_mgr' && row.publication_id"
+              type="button"
+              class="link recon-row-link"
+              :data-testid="`open-snapshot-detail-${row.id}`"
+              @click="openSnapshotDetail(row)"
+            >
+              查看快照详情
+            </button>
             <button
               v-for="action in meta.actions"
               :key="action"
@@ -94,7 +119,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   createEntry,
@@ -104,8 +130,11 @@ import {
   runAction as applyAction,
 } from '@/api/backend-service'
 import type { EntryRow } from '@/data/types'
+import PartitionReconciliationPanel from '@/components/PartitionReconciliationPanel.vue'
+import SnapshotPublicationsPanel from '@/components/SnapshotPublicationsPanel.vue'
 
 const props = defineProps<{ moduleKey: string }>()
+const router = useRouter()
 const meta = moduleMeta(props.moduleKey)
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
@@ -129,6 +158,36 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function reconciliationScope(row: EntryRow): string {
+  if (String(row['任务标识'] || '') === 'M41' || Number(row.id) === 41) {
+    return 'RCV-M41-P3-P4'
+  }
+  return ''
+}
+
+async function openReconciliation(row: EntryRow) {
+  const scope = reconciliationScope(row)
+  if (!scope) return
+  await router.push({ path: '/partition_merge', query: { scope } }).catch(() => undefined)
+  await scrollToReconciliation()
+}
+
+async function openSnapshotDetail(row: EntryRow) {
+  if (!row.publication_id) return
+  await router.push({
+    path: '/snapshot_mgr',
+    query: { publication: String(row.publication_id) },
+  }).catch(() => undefined)
+}
+
+async function scrollToReconciliation() {
+  await nextTick()
+  document.getElementById('partition-reconciliation-anchor')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  })
+}
 
 function resetFilters() {
   filters.value = {}

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.reconciliation import reconciliation_engine
 from app.store import store
 
 
@@ -16,6 +17,38 @@ class PartitionMergeService(BaseModuleService):
     STATUS_ORDER = ["排队中", "合并中", "已完成", "合并失败"]
     ACTION_RULES = {"启动合并": "排队中", "取消合并": "合并中"}
     NEGATIVE_ACTIONS = []
+
+    def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
+        """保留通用状态流转；分区重写核对类动作分派到幂等核对引擎。"""
+        # 标准状态动作仍走基类，避免关键词分派影响原有启动/取消流程。
+        if action in self.ACTION_RULES:
+            return super().run_action(entry_id, action)
+
+        normalized = action.casefold()
+        is_open = "核对视图" in action or "重写核对" in action or "reconciliation" in normalized
+        is_late = "迟到" in action or ("k5" in normalized and ("更新" in action or "更正" in action))
+        is_recheck = "重新核验" in action or "重核" in action or "reverify" in normalized
+        is_publish = "登记快照" in action or "发布快照" in action or "register snapshot" in normalized
+
+        if not (is_open or is_late or is_recheck or is_publish):
+            return super().run_action(entry_id, action)
+
+        entry = store.find(self.MODULE, entry_id)
+        identifier: Any = entry.get("任务标识") if entry else entry_id
+        if is_open:
+            result = reconciliation_engine.open_scope(task_code=identifier)
+        elif is_late:
+            result = reconciliation_engine.apply_late_correction(identifier)
+        elif is_recheck:
+            result = reconciliation_engine.reverify(identifier)
+        else:
+            mode = "refreshed" if ("刷新" in action or "更正" in action or "refreshed" in normalized) else "opened"
+            result = reconciliation_engine.publish_snapshot(identifier, mode=mode)
+
+        if result.get("ok") is False:
+            return None, str(result.get("message", "分区重写核对操作失败"))
+        message = str(result.get("message") or f"{self.ENTITY}已执行{action}")
+        return result, message
 
     def _safe_int(self, val: Any, default: int = 0) -> int:
         try: return int(val)
